@@ -1,0 +1,15 @@
+Fichiers de compilation Arduino
+
+*.hex
+*.elf
+*.bin
+*.ar
+*.map
+
+Fichiers systèmes et IDE
+
+.DS_Store
+Thumbs.db
+.vscode/
+build/
+*.ino.cpp
