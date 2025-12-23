@@ -1,36 +1,36 @@
-🌱 Système IoT de Surveillance de Salinité & Aide à la Décision (Maroc)
+# 🌱 Système IoT de Surveillance de Salinité & Aide à la Décision (Maroc)
 
 Ce projet est une solution IoT complète ("End-to-End") pour surveiller la salinité des sols agricoles dans les zones côtières marocaines (ex: Saïdia). Il combine l'acquisition de données physiques, le traitement local (Edge Computing) et une intelligence agronomique pour fournir des recommandations actionnables via Telegram.
 
-Fonctionnalités Clés
+## Fonctionnalités Clés
 
-Surveillance Temps Réel : Mesure continue de la Conductivité Électrique (EC) et conversion en TDS (ppm).
+- **Surveillance Temps Réel :** Mesure continue de la Conductivité Électrique (EC) et conversion en TDS (ppm).
 
-Edge Computing (ESP32) :
+- **Edge Computing (ESP32) :**
 
-Filtrage Numérique : Filtre médian et lissage exponentiel pour éliminer le bruit des capteurs low-cost.
+  - Filtrage Numérique : Filtre médian et lissage exponentiel pour éliminer le bruit des capteurs low-cost.
+  
+  - Machine à États : Gestion intelligente des notifications pour éviter le "spam" d'alertes.
+  
+  - Intelligence Contextuelle : Adaptation des seuils et conseils selon la région géographique configurée.
+  
+  - Système Expert Embarqué : Génération de conseils précis (Irrigation, Lessivage, Amendement) sans dépendre du Cloud.
 
-Machine à États : Gestion intelligente des notifications pour éviter le "spam" d'alertes.
+- **Dashboard Cloud :** Visualisation historique et temps réel sur ThingsBoard.
 
-Intelligence Contextuelle : Adaptation des seuils et conseils selon la région géographique configurée.
+- **Alertes Mobiles :** Notifications riches via Telegram avec émojis et plans d'action.
 
-Système Expert Embarqué : Génération de conseils précis (Irrigation, Lessivage, Amendement) sans dépendre du Cloud.
+## Architecture Matérielle
 
-Dashboard Cloud : Visualisation historique et temps réel sur ThingsBoard.
+- **Microcontrôleur :** ESP32 DevKit V1 (Wi-Fi intégré).
 
-Alertes Mobiles : Notifications riches via Telegram avec émojis et plans d'action.
+- **Capteur :** Sonde TDS analogique (Total Dissolved Solids).
 
-Architecture Matérielle
+- **Alimentation :** 5V / 3.3V via Micro-USB.
 
-Microcontrôleur : ESP32 DevKit V1 (Wi-Fi intégré).
+## Installation & Configuration
 
-Capteur : Sonde TDS analogique (Total Dissolved Solids).
-
-Alimentation : 5V / 3.3V via Micro-USB.
-
-Installation & Configuration
-
-1. Prérequis
+### 1. Prérequis
 
 Arduino IDE avec le support ESP32 installé.
 
@@ -44,7 +44,7 @@ HTTPClient & WiFiClientSecure (Standard ESP32)
 
 Preferences (Standard ESP32)
 ```
-2. Configuration du Firmware
+### 2. Configuration du Firmware
 
 Ouvrez le fichier source et modifiez la section CONFIGURATION UTILISATEUR avec vos propres identifiants :
 
@@ -62,7 +62,7 @@ const char* chat_id     = "VOTRE_CHAT_ID";
 String REGION_CIBLE = "SAIDIA"; // Choix : SAIDIA, AGADIR, DAKHLA...
 ```
 
-3. Branchement
+### 3. Branchement
 
 Sonde TDS (Signal) -> Broche 34 (Analog Input) de l'ESP32.
 
