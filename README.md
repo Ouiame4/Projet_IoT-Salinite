@@ -84,8 +84,4 @@ Le système publie les données sur le topic MQTT : v1/devices/me/telemetry
 }
 ```
 
-Auteur
 
-Ouiame Makhoukh Élève Ingénieure en Data Science & Cloud Computing à l'ENSAO.
-
-Projet réalisé dans le cadre du module IoT - Encadré par Prof. Kamal AZGHIOU.
