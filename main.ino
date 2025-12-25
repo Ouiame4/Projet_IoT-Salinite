@@ -45,610 +45,315 @@ const float FACTEUR_CONVERSION = 0.5;
 const float MAX_TDS_CAPTEUR = 1000.0;
 
 // --- 5. Seuils (ppm) ---
-const float SEUIL_NORMAL        = 400.0;
-const float SEUIL_ATTENTION     = 700.0;
-const float SEUIL_IMMERSION_MIN = 150.0; 
+const float SEUIL_IMMERSION_MIN = 20.0;
+const float SEUIL_NORMAL = 400.0;
+const float SEUIL_ATTENTION = 700.0;
 
-// ============================================================
-//                    VARIABLES GLOBALES
-// ============================================================
-const long intervalEnvoi = 5000; 
-unsigned long dernierEnvoi = 0;
-const unsigned long ALERT_REPEAT_INTERVAL = 10UL * 60UL * 1000UL; // 10 min
+// Timers
+const unsigned long INTERVAL_LECTURE = 5000;
+const unsigned long ALERT_REPEAT_INTERVAL = 600000;
 
-// Analyse de tendance
-const int TREND_WINDOW = 6;
-float trendWindow[TREND_WINDOW];
-int trendIndex = 0;
-bool trendFilled = false;
+/* ==========================================================
+                     OBJETS & VARIABLES
+========================================================== */
 
-// Objets
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 Preferences prefs;
 
-// États & Mémoire
-String lastState = "";
+unsigned long lastSend = 0;
 unsigned long lastAlertTime = 0;
+String lastState = "";
 
-// ============================================================
-//                    STRUCTURES DE DONNÉES
-// ============================================================
+/* ==========================================================
+                     STRUCTURES
+========================================================== */
 
 struct RegionInfo {
   String region;
   String climat;
-  String culturesAdaptées;
-  String conseilsIrrigation;
+  String cultures;
+  String conseil;
 };
 
-struct DecisionAgronomique {
-  // DIAGNOSTIC
-  String emoji_etat;
-  String titre_etat;
-  float tds;
-  String niveau_gravite;
-  
-  // ACTIONS IMMÉDIATES
-  String action_prioritaire;
-  String quantite_eau;
-  String frequence;
-  String moment_optimal;
-  
-  // CULTURES
-  String cultures_ok;
-  String cultures_danger;
-  String cultures_prochaine_saison;
-  
-  // TIMELINE
-  String urgence;
-  String delai_action;
-  String duree_traitement;
-  
-  // SURVEILLANCE
-  String symptomes_plantes;
-  String quoi_verifier;
-};
-
-// ============================================================
-//                    FONCTIONS UTILITAIRES
-// ============================================================
+/* ==========================================================
+                     OUTILS
+========================================================== */
 
 String urlEncode(String s) {
   String out = "";
-  for (size_t i = 0; i < s.length(); i++) {
-    char c = s.charAt(i);
+  for (char c : s) {
     if (isalnum(c)) out += c;
     else if (c == ' ') out += '+';
     else {
-      const char* hex = "0123456789ABCDEF";
-      out += '%';
-      out += hex[(c >> 4) & 0xF];
-      out += hex[c & 0xF];
+      char buf[4];
+      sprintf(buf, "%%%02X", c);
+      out += buf;
     }
   }
   return out;
 }
 
-// ============================================================
-//               INTELLIGENCE GÉOGRAPHIQUE (MAROC)
-// ============================================================
+/* ==========================================================
+                RÉGIONS CÔTIÈRES DU MAROC
+========================================================== */
 
 RegionInfo getRegionInfo(String region) {
-  RegionInfo info;
-  region.toUpperCase();  
+  region.toUpperCase();
+  RegionInfo r;
 
-  if (region == "TANGER" || region == "TETOUAN" || region == "MDIQ" || 
-      region == "FNIDEQ" || region == "AL HOCEIMA" || region == "NADOR" || 
-      region == "BERKANE" || region == "SAIDIA") 
-  {
-    info.region = "Nord / Oriental";
-    info.climat = "🌦️ Humide";
-    info.culturesAdaptées = "🍊 Agrumes, 🍇 Vigne";
-    info.conseilsIrrigation = "Attention aux remontées salines l'été";
+  if (region == "TANGER" || region == "TETOUAN" || region == "MDIQ" ||
+      region == "FNIDEQ" || region == "AL HOCEIMA" || region == "NADOR" ||
+      region == "BERKANE" || region == "SAIDIA") {
+    r.region = "Nord / Oriental";
+    r.climat = "🌦️ Humide côtier";
+    r.cultures = "🍊 Agrumes, 🍇 Vigne, 🥔 Pomme de terre";
+    r.conseil = "Surveiller remontées salines estivales";
   }
-  else if (region == "KENITRA" || region == "RABAT" || region == "SALE" || 
-           region == "MOHAMMEDIA" || region == "CASABLANCA") 
-  {
-    info.region = "Côte Nord (Gharb)";
-    info.climat = "🌤️ Tempéré";
-    info.culturesAdaptées = "🍓 Fruits rouges, 🥑 Avocat";
-    info.conseilsIrrigation = "Drainage important requis";
+  else if (region == "KENITRA" || region == "RABAT" || region == "SALE" ||
+           region == "CASABLANCA" || region == "MOHAMMEDIA") {
+    r.region = "Gharb – Atlantique Nord";
+    r.climat = "🌤️ Tempéré océanique";
+    r.cultures = "🥑 Avocat, 🍓 Fruits rouges";
+    r.conseil = "Drainage essentiel en sols lourds";
   }
-  else if (region == "EL JADIDA" || region == "SAFI" || region == "ESSAOUIRA") 
-  {
-    info.region = "Doukkala / Abda";
-    info.climat = "🌤️ Venté";
-    info.culturesAdaptées = "🍅 Tomate champ, 🍈 Melon";
-    info.conseilsIrrigation = "Eau rare, économisez-la";
+  else if (region == "EL JADIDA" || region == "SAFI" || region == "ESSAOUIRA") {
+    r.region = "Doukkala – Abda";
+    r.climat = "🌬️ Venté";
+    r.cultures = "🍅 Tomate, 🍈 Melon";
+    r.conseil = "Irrigation économe recommandée";
   }
-  else if (region == "AGADIR" || region == "TIZNIT" || region == "CHTOUKA") 
-  {
-    info.region = "Souss-Massa";
-    info.climat = "🔥 Chaud";
-    info.culturesAdaptées = "🍅 Tomate serre, 🍌 Banane";
-    info.conseilsIrrigation = "Eau saumâtre fréquente";
+  else if (region == "AGADIR" || region == "TIZNIT" || region == "CHTOUKA") {
+    r.region = "Souss-Massa";
+    r.climat = "🔥 Chaud";
+    r.cultures = "🍅 Tomate serre, 🍌 Banane";
+    r.conseil = "Eau saumâtre fréquente – surveiller TDS";
   }
-  else if (region == "LAAYOUNE" || region == "DAKHLA" || region == "BOUJDOUR") 
-  {
-    info.region = "Sahara (Dakhla)";
-    info.climat = "🔥🌬️ Désert";
-    info.culturesAdaptées = "🍅 Tomate Cherry, 🍈 Melon";
-    info.conseilsIrrigation = "Irrigation de précision vitale";
+  else if (region == "DAKHLA" || region == "LAAYOUNE" || region == "BOUJDOUR") {
+    r.region = "Sahara Atlantique";
+    r.climat = "🔥🌬️ Désert";
+    r.cultures = "🍈 Melon, 🍅 Tomate cerise";
+    r.conseil = "Irrigation de précision obligatoire";
   }
   else {
-    info.region = "Maroc (Général)";
-    info.climat = "🌍 Variable";
-    info.culturesAdaptées = "Céréales, Olivier";
-    info.conseilsIrrigation = "Adapter selon la saison";
+    r.region = "Maroc (Général)";
+    r.climat = "🌍 Variable";
+    r.cultures = "🌾 Céréales, 🫒 Olivier";
+    r.conseil = "Adapter selon saison";
   }
-  return info;
+
+  return r;
 }
 
-// ============================================================
-//         GÉNÉRATION DES RECOMMANDATIONS DÉTAILLÉES
-// ============================================================
+/* ==========================================================
+                LECTURE TDS (CORRIGÉE)
+========================================================== */
 
-DecisionAgronomique genererDecision(float tds, String region) {
-  DecisionAgronomique dec;
-  dec.tds = tds;
-  
-  // Cas 1 : Normal (< 400)
-  if (tds < 400.0) {
-    dec.emoji_etat = "🟢";
-    dec.titre_etat = "SOL SAIN - Conditions Optimales";
-    dec.niveau_gravite = "Normal";
-    dec.action_prioritaire = "Continue ton irrigation habituelle";
-    dec.quantite_eau = "Dose normale (selon ta culture)";
-    dec.frequence = "Selon besoins de la plante";
-    dec.moment_optimal = "Matin (7h-9h) ou soir (18h-20h)";
-    dec.cultures_ok = "🥕 TOUT ! Carotte, Fraise, Oignon, Laitue, Haricot, Concombre";
-    dec.cultures_danger = "Aucune restriction";
-    dec.cultures_prochaine_saison = "Profite pour planter des cultures délicates (Fraise, Laitue)";
-    dec.urgence = "Situation stable";
-    dec.delai_action = "Pas d'urgence";
-    dec.duree_traitement = "Continue normalement";
-    dec.symptomes_plantes = "Aucun symptôme attendu - plantes saines";
-    dec.quoi_verifier = "Rien de spécial, juste l'entretien habituel";
-  }
-  // Cas 2 : Attention (400 - 700)
-  else if (tds < 700.0) {
-    dec.emoji_etat = "🟡";
-    dec.titre_etat = "ATTENTION - Début de Stress Salin";
-    dec.niveau_gravite = "Préoccupant - Surveiller";
-    dec.action_prioritaire = "Augmente légèrement l'irrigation pour diluer le sel";
-    dec.quantite_eau = "+10% d'eau par rapport à d'habitude";
-    dec.frequence = "Arrose tous les 2 jours (au lieu de 3)";
-    dec.moment_optimal = "Matin (6h-8h) - JAMAIS en plein soleil";
-    dec.cultures_ok = "🍅 Tomate, 🌽 Maïs, 🥬 Chou, 🥔 Pomme de terre";
-    dec.cultures_danger = "🛑 Évite : Fraise, Haricot vert, Laitue (trop sensibles)";
-    dec.cultures_prochaine_saison = "Prépare un lessivage pour la saison prochaine";
-    dec.urgence = "Cette semaine";
-    dec.delai_action = "Commence dès demain matin";
-    dec.duree_traitement = "Continue 2 semaines, puis réévalue";
-    dec.symptomes_plantes = "Feuilles avec bords secs/jaunâtres";
-    dec.quoi_verifier = "Vérifie le BOUT des feuilles chaque matin (premiers signes)";
-  }
-  // Cas 3 : Alerte (700 - 1000)
-  else if (tds < 1000.0) {
-    dec.emoji_etat = "🟠";
-    dec.titre_etat = "ALERTE - Sel Élevé, Agis Vite !";
-    dec.niveau_gravite = "Critique - Action Urgente";
-    dec.action_prioritaire = "LESSIVAGE IMMÉDIAT : Inonde le sol pour chasser le sel";
-    dec.quantite_eau = "+30% d'eau (300L/m² minimum)";
-    dec.frequence = "2 fois par jour pendant 3 jours, puis 1x/jour pendant 4 jours";
-    dec.moment_optimal = "Matin (6h) ET soir (19h) - Évite 10h-16h (évaporation)";
-    dec.cultures_ok = "🍠 Betterave, 🌾 Orge, 🥬 Épinard (tolérantes au sel)";
-    dec.cultures_danger = "🛑 STOP TOUT : Salades, Carottes, Oignons, Fraises (vont mourir)";
-    dec.cultures_prochaine_saison = "Attends que le TDS descende < 500 ppm avant de replanter";
-    dec.urgence = "🚨 IMMÉDIAT - Dans les 24h";
-    dec.delai_action = "Agis AUJOURD'HUI même";
-    dec.duree_traitement = "Lessivage intensif : 7 jours minimum";
-    dec.symptomes_plantes = "Feuilles brûlées, croissance arrêtée, flétrissement";
-    dec.quoi_verifier = "Mesure le TDS tous les 2 jours pour voir si ça descend";
-  }
-  // Cas 4 : Danger (> 1000)
-  else {
-    dec.emoji_etat = "🔴";
-    dec.titre_etat = "DANGER - Sol Toxique, Culture Impossible";
-    dec.niveau_gravite = "Catastrophique - Intervention d'Expert";
-    dec.action_prioritaire = "DRAINAGE + AMENDEMENT : Pose des drains ET ajoute du Gypse";
-    dec.quantite_eau = "Inondation massive (500L/m²) APRÈS avoir posé les drains";
-    dec.frequence = "Drainage continu pendant 2 semaines";
-    dec.moment_optimal = "Travaux de jour (8h-17h) - contacte un agronome";
-    dec.cultures_ok = "🌴 Seulement Palmier dattier (ultra-tolérant)";
-    dec.cultures_danger = "🚫 AUCUNE culture maraîchère possible - sol toxique";
-    dec.cultures_prochaine_saison = "Réhabilitation du sol : 3-6 mois minimum";
-    dec.urgence = "🚑 URGENCE ABSOLUE";
-    dec.delai_action = "Appelle un expert MAINTENANT (contacte l'ORMVA)";
-    dec.duree_traitement = "Réhabilitation : 3 à 6 mois";
-    dec.symptomes_plantes = "Plantes mortes ou mourantes - croûte de sel visible";
-    dec.quoi_verifier = "Ne plante RIEN avant que TDS < 700 ppm";
-  }
-  
-  return dec;
-}
+float lireTDSFiltered() {
+  float samples[NUM_LECTURES];
 
-// ============================================================
-//         CONSTRUCTION DU MESSAGE TELEGRAM COMPLET
-// ============================================================
-
-String construireMessageDecision(float tds, String region, float percentChange = 0.0) {
-  DecisionAgronomique dec = genererDecision(tds, region);
-  RegionInfo ri = getRegionInfo(region);
-  
-  String msg = "";
-  
-  // EN-TÊTE
-  msg += dec.emoji_etat + " *" + dec.titre_etat + "*\n";
-  msg += "📍 " + ri.region + " • " + ri.climat + "\n";
-  msg += "📊 Salinité : *" + String(tds, 0) + " ppm* (" + dec.niveau_gravite + ")\n";
-  
-  // Tendance si disponible
-  if (percentChange != 0.0) {
-    if (percentChange > 0) {
-      msg += "📈 Tendance : +" + String(percentChange, 1) + "% (hausse)\n";
-    } else {
-      msg += "📉 Tendance : " + String(percentChange, 1) + "% (baisse)\n";
-    }
+  for (int i = 0; i < NUM_LECTURES; i++) {
+    samples[i] = analogRead(TDS_PIN);
+    delay(40);
   }
-  
-  msg += "━━━━━━━━━━━━━━━━━━━━\n\n";
-  
-  // SECTION 1 : ACTION IMMÉDIATE
-  msg += "🎯 *QUE FAIRE MAINTENANT ?*\n";
-  msg += "➤ " + dec.action_prioritaire + "\n\n";
-  
-  msg += "💧 *Quantité d'eau :*\n";
-  msg += "   " + dec.quantite_eau + "\n\n";
-  
-  msg += "📅 *Fréquence :*\n";
-  msg += "   " + dec.frequence + "\n\n";
-  
-  msg += "🕐 *Meilleur moment :*\n";
-  msg += "   " + dec.moment_optimal + "\n\n";
-  
-  msg += "⏰ *URGENCE :* " + dec.urgence + "\n";
-  msg += "⏳ *Délai :* " + dec.delai_action + "\n";
-  msg += "📆 *Durée :* " + dec.duree_traitement + "\n";
-  msg += "━━━━━━━━━━━━━━━━━━━━\n\n";
-  
-  // SECTION 2 : CULTURES
-  msg += "🌱 *CULTURES - Quoi Planter ?*\n\n";
-  
-  msg += "✅ *Cultures possibles :*\n";
-  msg += "   " + dec.cultures_ok + "\n\n";
-  
-  msg += "❌ *À ÉVITER absolument :*\n";
-  msg += "   " + dec.cultures_danger + "\n\n";
-  
-  msg += "🔮 *Prochaine saison :*\n";
-  msg += "   " + dec.cultures_prochaine_saison + "\n";
-  msg += "━━━━━━━━━━━━━━━━━━━━\n\n";
-  
-  // SECTION 3 : SURVEILLANCE
-  msg += "👁️ *SURVEILLANCE*\n\n";
-  
-  msg += "🔍 *Symptômes à observer :*\n";
-  msg += "   " + dec.symptomes_plantes + "\n\n";
-  
-  msg += "✔️ *Action de suivi :*\n";
-  msg += "   " + dec.quoi_verifier + "\n";
-  msg += "━━━━━━━━━━━━━━━━━━━━\n\n";
-  
-  // AIDE si critique
-  if (tds >= 1000.0) {
-    msg += "📞 *BESOIN D'AIDE ?*\n";
-    msg += "   • ORMVA Oriental\n";
-    msg += "   • Centre Conseil Agricole\n";
-    msg += "   • Agronome de proximité\n";
-    msg += "━━━━━━━━━━━━━━━━━━━━\n\n";
-  }
-  
-  // Note régionale si nécessaire
-  if (tds > 400.0) {
-    msg += "📍 *Note " + ri.region + " :*\n";
-    msg += "   " + ri.conseilsIrrigation + "\n\n";
-  }
-  
-  // Pied de page
-  msg += "━━━━━━━━━━━━━━━━━━━━\n";
-  msg += "🤖 Système IoT Salinité ";
-  
-  return msg;
-}
 
-// ============================================================
-//                  FILTRAGE & LECTURE
-// ============================================================
-
-float medianOfArray(float *a, int n) {
-  for (int i = 0; i < n - 1; ++i) {
-    for (int j = i + 1; j < n; ++j) {
-      if (a[j] < a[i]) {
-        float tmp = a[i]; a[i] = a[j]; a[j] = tmp;
+  // Tri pour médiane
+  for (int i = 0; i < NUM_LECTURES - 1; i++) {
+    for (int j = i + 1; j < NUM_LECTURES; j++) {
+      if (samples[i] > samples[j]) {
+        float t = samples[i];
+        samples[i] = samples[j];
+        samples[j] = t;
       }
     }
   }
-  return a[n/2];
+
+  float raw = samples[NUM_LECTURES / 2];
+  float voltage = raw * VREF / ADC_RESOLUTION;
+
+  float tds = (133.42 * pow(voltage, 3)
+              -255.86 * pow(voltage, 2)
+              +857.39 * voltage) * 0.5;
+
+  if (tds < SEUIL_IMMERSION_MIN || voltage < 0.05) return 0.0;
+
+  static float smooth = 0;
+  smooth = 0.7 * smooth + 0.3 * tds;
+
+  return smooth;
 }
 
-float lireTDSFiltered() {
-  float mesures[NUM_LECTURES];
-  float minVal = 10000.0; 
-  float maxVal = -10000.0;
+/* ==========================================================
+                ÉTAT DU SOL
+========================================================== */
 
-  for (int i = 0; i < NUM_LECTURES; ++i) {
-    int raw = analogRead(TDS_PIN);
-    float tension = (raw * VREF) / ADC_RESOLUTION;
-    mesures[i] = tension * 1000.0 * FACTEUR_CONVERSION;
-    
-    if (mesures[i] < minVal) minVal = mesures[i];
-    if (mesures[i] > maxVal) maxVal = mesures[i];
-    delay(20);
-  }
-  
-  if ((maxVal - minVal) > 300.0) return 0.0;
-
-  float med = medianOfArray(mesures, NUM_LECTURES);
-  if (med < SEUIL_IMMERSION_MIN) return 0.0;
-  
-  if (med > MAX_TDS_CAPTEUR) med = MAX_TDS_CAPTEUR;
-  
-  static float smoothed = 0.0;
-  smoothed = 0.7 * smoothed + 0.3 * med;
-  return smoothed;
+String determinerEtat(float tds) {
+  if (tds == 0.0) return "NON_IMMERGEE";
+  if (tds < SEUIL_NORMAL) return "NORMAL";
+  if (tds < SEUIL_ATTENTION) return "ATTENTION";
+  return "ALERTE";
 }
 
-// ============================================================
-//                  WIFI & MQTT
-// ============================================================
+/* ==========================================================
+                CONNEXIONS
+========================================================== */
 
 void connecterWiFi() {
-  Serial.print("Connexion WiFi");
   WiFi.begin(ssid, password);
-  int tries = 0;
-  while (WiFi.status() != WL_CONNECTED && tries < 20) {
-    Serial.print("."); delay(500); tries++;
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
   }
-  if (WiFi.status() == WL_CONNECTED) Serial.println(" ✅");
-  else Serial.println(" ❌ WiFi Erreur");
+  Serial.println("WiFi connecté");
 }
 
 void connecterMQTT() {
-  if (mqttClient.connected()) return;
   mqttClient.setServer(mqtt_server, mqtt_port);
   while (!mqttClient.connected()) {
-    Serial.print("Connexion MQTT...");
-    if (mqttClient.connect("ESP32_Projet_S3", token, NULL)) {
-      Serial.println(" ✅ Connecté");
+    if (mqttClient.connect("ESP32_SALINITE", token, NULL)) {
+      Serial.println("MQTT connecté");
     } else {
-      Serial.print(" ❌ Code: "); Serial.println(mqttClient.state());
       delay(2000);
     }
   }
 }
 
-// ============================================================
-//     FONCTION MQTT (SIMPLIFIÉE - SANS GPS)
-// ============================================================
+/* ==========================================================
+                TELEGRAM
+========================================================== */
 
-void envoyerDonneesMQTT(float tds, String etat, float tendance) {
-  RegionInfo ri = getRegionInfo(REGION_CIBLE);
-  DecisionAgronomique dec = genererDecision(tds, REGION_CIBLE);
-
-  // Construction JSON sans coordonnées GPS
-  String payload = "{";
-  payload += "\"tds\":" + String(tds, 1);
-  payload += ",\"etat\":\"" + etat + "\"";
-  payload += ",\"region\":\"" + ri.region + "\""; 
-  payload += ",\"tendance\":" + String(tendance, 1);
-  payload += ",\"conseil\":\"" + dec.action_prioritaire + "\""; 
-  payload += "}";
-  
-  mqttClient.publish("v1/devices/me/telemetry", payload.c_str());
-}
-
-// ============================================================
-//                  TELEGRAM
-// ============================================================
-
-void envoyerTelegramRaw(String message) {
-  if (WiFi.status() != WL_CONNECTED) return;
+void envoyerTelegram(String message) {
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
-  
-  String url = "https://api.telegram.org/bot" + String(bot_token) + 
-               "/sendMessage?chat_id=" + String(chat_id) + 
-               "&text=" + urlEncode(message) + 
-               "&parse_mode=Markdown";
-               
+
+  String url = "https://api.telegram.org/bot" + String(bot_token) +
+               "/sendMessage?chat_id=" + String(chat_id) +
+               "&parse_mode=Markdown&text=" + urlEncode(message);
+
   http.begin(client, url);
-  int httpCode = http.GET();
-  
-  if (httpCode > 0) {
-    Serial.println("✅ Telegram envoyé");
-  } else {
-    Serial.println("❌ Erreur Telegram");
-  }
-  
+  http.GET();
   http.end();
 }
+String construireMessageAlerte(float tds, String region) {
+  RegionInfo ri = getRegionInfo(region);
 
-void envoyerAlerteTelegramAmelioree(float tds, float percentChange) {
   String msg = "🚨 *NOUVELLE ALERTE*\n\n";
-  msg += construireMessageDecision(tds, REGION_CIBLE, percentChange);
-  envoyerTelegramRaw(msg);
+
+  msg += " *ALERTE - Sel Élevé, Agis Vite !*\n";
+  msg += "📍 " + ri.region + " • " + ri.climat + "\n";
+  msg += "📊 Salinité : *" + String(tds, 0) + " ppm* (Critique - Action Urgente)\n";
+  msg += "━━━━━━━━━━━━━━━━━━━━\n\n";
+
+  msg += "🎯 *QUE FAIRE MAINTENANT ?*\n";
+  msg += "➤ *LESSIVAGE IMMÉDIAT* : Inonde le sol pour chasser le sel\n\n";
+
+  msg += "💧 *Quantité d'eau :*\n";
+  msg += "   +30% d'eau (300L/m² minimum)\n\n";
+
+  msg += "📅 *Fréquence :*\n";
+  msg += "   2 fois/jour pendant 3 jours,\n";
+  msg += "   puis 1 fois/jour pendant 4 jours\n\n";
+
+  msg += "🕐 *Meilleur moment :*\n";
+  msg += "   Matin (6h) ET soir (19h)\n";
+  msg += "   ⛔ Éviter 10h–16h (évaporation)\n\n";
+
+  msg += "⏰ *URGENCE* : 🚨 IMMÉDIAT (24h)\n";
+  msg += "📆 *Durée* : Lessivage intensif 7 jours minimum\n";
+  msg += "━━━━━━━━━━━━━━━━━━━━\n\n";
+
+  msg += "🌱 *CULTURES - Quoi Planter ?*\n\n";
+  msg += "✅ *Cultures possibles :*\n";
+  msg += "   🍠 Betterave, 🌾 Orge, 🥬 Épinard\n\n";
+
+  msg += "❌ *À ÉVITER absolument :*\n";
+  msg += "    Salades, Carottes, Oignons, Fraises\n\n";
+
+  msg += "🔮 *Prochaine saison :*\n";
+  msg += "   Attendre TDS < 500 ppm avant replantation\n";
+  msg += "━━━━━━━━━━━━━━━━━━━━\n\n";
+
+  msg += "👁️ *SURVEILLANCE*\n\n";
+  msg += "🔍 Symptômes :\n";
+  msg += "   Feuilles brûlées, croissance arrêtée\n\n";
+
+  msg += "✔️ Suivi :\n";
+  msg += "   Mesure TDS tous les 2 jours\n";
+  msg += "━━━━━━━━━━━━━━━━━━━━\n\n";
+
+  msg += "📍 *Note " + ri.region + " :*\n";
+  msg += "   " + ri.conseil + "\n\n";
+
+  msg += "━━━━━━━━━━━━━━━━━━━━\n";
+  msg += "🤖 *Système IoT Salinité*";
+
+  return msg;
 }
 
-void envoyerConseilNormalAmelioree(float tds, float percentChange, String titre = "ℹ️ *BULLETIN QUOTIDIEN*") {
-  String msg = titre + "\n\n";
-  msg += construireMessageDecision(tds, REGION_CIBLE, percentChange);
-  envoyerTelegramRaw(msg);
-}
-
-// ============================================================
-//                  GESTION TENDANCE
-// ============================================================
-
-void pushTrendWindow(float val) {
-  trendWindow[trendIndex] = val;
-  trendIndex = (trendIndex + 1) % TREND_WINDOW;
-  if (!trendFilled && trendIndex == 0) trendFilled = true;
-}
-
-float calculerTendance() {
-  if (!trendFilled) return 0.0;
-  
-  float sum = 0;
-  for(int i = 0; i < TREND_WINDOW; i++) {
-    sum += trendWindow[i];
-  }
-  float moyenne = sum / TREND_WINDOW;
-  
-  float derniereMesure = trendWindow[(trendIndex - 1 + TREND_WINDOW) % TREND_WINDOW];
-  
-  if (moyenne > 0) {
-    return ((derniereMesure - moyenne) / moyenne) * 100.0;
-  }
-  return 0.0;
-}
-
-// ============================================================
-//                  SETUP & LOOP
-// ============================================================
+/* ==========================================================
+                SETUP
+========================================================== */
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
-  Serial.println("\n╔════════════════════════════════════════╗");
-  Serial.println("║  Système Salinité Maroc                  ║");
-  Serial.println("║  Version Finale                          ║");
-  Serial.println("╚════════════════════════════════════════╝");
-  Serial.print("📍 Région : "); Serial.println(REGION_CIBLE);
-
   pinMode(TDS_PIN, INPUT);
-  
-  // Charger dernière valeur
-  prefs.begin("salinite", true);
-  float lastTDS = prefs.getFloat("lastTDS", 0.0);
-  Serial.print("💾 Dernière mesure : "); Serial.print(lastTDS); Serial.println(" ppm");
-  prefs.end();
 
   connecterWiFi();
   connecterMQTT();
-  
-  // Message de démarrage
-  String startMsg = "🌍 *Système Activé*\n\n";
-  startMsg += "📍 Région : " + REGION_CIBLE + "\n";
-  startMsg += "Prêt à surveiller votre sol !";
-  envoyerTelegramRaw(startMsg);
-  
-  Serial.println("Système prêt !\n");
+
+  envoyerTelegram("🌍 *Système Salinité Activé*\n📍 Région : " + REGION_CIBLE);
 }
 
+/* ==========================================================
+                LOOP PRINCIPALE
+========================================================== */
+
 void loop() {
-  if (!mqttClient.connected()) connecterMQTT();
   mqttClient.loop();
 
-  unsigned long now = millis();
-  if (now - dernierEnvoi >= intervalEnvoi) {
-    dernierEnvoi = now;
+  if (millis() - lastSend < INTERVAL_LECTURE) return;
+  lastSend = millis();
 
-    // 1. Lecture brute
-    float tds = lireTDSFiltered(); 
-    
-    // 2. Détermination de l'état INSTANTANÉ (Candidat)
-    String etatInstantan = "";
-    if (tds == 0.0) etatInstantan = "NON_IMMERGEE";
-    else if (tds < SEUIL_NORMAL) etatInstantan = "NORMAL";
-    else if (tds < SEUIL_ATTENTION) etatInstantan = "ATTENTION";
-    else etatInstantan = "ALERTE";
+  float tds = lireTDSFiltered();
+  String etat = determinerEtat(tds);
+  RegionInfo ri = getRegionInfo(REGION_CIBLE);
 
-    // 3. Calcul de la tendance (sur les valeurs brutes)
-    if (tds > 0) pushTrendWindow(tds);
-    float percentChange = calculerTendance();
+  Serial.print("TDS: ");
+  Serial.print(tds, 1);
+  Serial.print(" ppm | État: ");
+  Serial.println(etat);
 
-    // 4. Envoi MQTT (On envoie toujours la donnée brute au Dashboard pour voir ce qui se passe)
-    // Note : On envoie l'état instantané pour le temps réel
-    Serial.print("📊 TDS: "); Serial.print(tds, 1); 
-    Serial.print(" | Brut: "); Serial.print(etatInstantan);
-    
-    envoyerDonneesMQTT(tds, etatInstantan, percentChange);
+  // MQTT
+  String payload = "{";
+  payload += "\"tds\":" + String(tds,1);
+  payload += ",\"etat\":\"" + etat + "\"";
+  payload += ",\"region\":\"" + ri.region + "\"";
+  payload += "}";
 
-    // ═══════════════════════════════════════════════════════
-    //        FILTRE DE STABILITÉ (ANTI-FAUX POSITIFS)
-    // ═══════════════════════════════════════════════════════
-    static String etatCandidat = "";
-    static int compteurStabilite = 0;
-    
-    // Si l'état change par rapport à la dernière lecture (ex: bruit dans l'air)
-    if (etatInstantan != etatCandidat) {
-        Serial.println(" -> ⏳ Instable (Attente confirmation...)");
-        etatCandidat = etatInstantan; // On mémorise ce nouvel état potentiel
-        compteurStabilite = 0;        // On reset le compteur
-        return;                       // ON SORT : Pas de Telegram tant que ce n'est pas stable !
-    } else {
-        compteurStabilite++; // L'état se maintient
-    }
+  mqttClient.publish("v1/devices/me/telemetry", payload.c_str());
 
-    // Il faut que l'état soit identique au moins 1 fois de suite (Confirmation)
-    if (compteurStabilite < 1) return; 
+  // Telegram sur changement d’état
+  if (etat != lastState && etat != "NON_IMMERGEE") {
 
-    // SI ON ARRIVE ICI, L'ÉTAT EST CONFIRMÉ ET STABLE
-    String etatStable = etatInstantan;
-    Serial.println(" -> ✅ Confirmé");
-
-    // ═══════════════════════════════════════════════════════
-    //          LOGIQUE DE NOTIFICATION TELEGRAM
-    // ═══════════════════════════════════════════════════════
-
-    // 1. Détection de changement d'état (sur l'état STABLE uniquement)
-    if (etatStable != lastState) {
-       
-       // On ignore le passage à "NON_IMMERGEE" pour les alertes (quand on sort la sonde)
-       if (etatStable != "NON_IMMERGEE") {
-           Serial.println("🔔 Changement d'état validé ! Envoi Telegram...");
-           
-           if (etatStable == "ALERTE") {
-              envoyerAlerteTelegramAmelioree(tds, percentChange);
-           } else {
-              if (lastState != "" && lastState != "NON_IMMERGEE") {
-                  envoyerConseilNormalAmelioree(tds, percentChange, "📢 *RETOUR À LA NORMALE*");
-              }
-           }
-           lastAlertTime = now;
-       }
-       
-       lastState = etatStable; // Mise à jour de la mémoire
-    }
-
-    // 2. Rappels périodiques (Seulement si ALERTE confirmée)
-    if (etatStable == "ALERTE") {
-       if (now - lastAlertTime >= ALERT_REPEAT_INTERVAL) {
-          Serial.println("⏰ Rappel d'alerte envoyé");
-          envoyerAlerteTelegramAmelioree(tds, percentChange);
-          lastAlertTime = now;
-       }
-    } 
-    // Bulletin périodique pour les autres états (Optionnel, ici désactivé ou long)
-    else if (etatStable == "NORMAL" || etatStable == "ATTENTION") {
-       static unsigned long lastAdvice = 0;
-       // Toutes les 30 min (30*60*1000)
-       if (now - lastAdvice > 1800000UL) { 
-          envoyerConseilNormalAmelioree(tds, percentChange, "ℹ️ *BULLETIN PÉRIODIQUE*");
-          lastAdvice = now;
-       }
-    }
-    
-    // Sauvegarde Persistence
-    static unsigned long lastSave = 0;
-    if (now - lastSave > 60000 && tds > 0) {
-       prefs.begin("salinite", false);
-       prefs.putFloat("lastTDS", tds);
-       prefs.end();
-       lastSave = now;
-    }
+  // ALERTE : message complet
+  if (etat == "ALERTE") {
+    String msg = construireMessageAlerte(tds, REGION_CIBLE);
+    envoyerTelegram(msg);
+    lastAlertTime = millis();
   }
+
+  //  ATTENTION : message résumé
+  else if (etat == "ATTENTION") {
+    String msg = "⚠️ *ATTENTION – Début de stress salin*\n\n";
+    msg += "📍 " + ri.region + "\n";
+    msg += "📊 TDS : " + String(tds, 0) + " ppm\n";
+    msg += "🧠 Conseil : Augmente légèrement l’irrigation";
+    envoyerTelegram(msg);
+  }
+
+  lastState = etat;
+}
+
+
 }
